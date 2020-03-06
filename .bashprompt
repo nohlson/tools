@@ -1,0 +1,6 @@
+PROMPT_COMMAND='export PREVEXITCODE=$?'
+
+parse_git_branch() {
+	git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ (\1)/'
+}
+PS1='[ \e[1;$([ $PREVEXITCODE == 0 ] && echo 32 || ([ $PREVEXITCODE -gt 128 ] && echo 31 || echo 33))m$(printf %3s $PREVEXITCODE)\e[0m ][ \e[1;32m$(printf %8s \u)@\h\e[0m ][ \e[0;32m\d @ \t\e[0m ][ \e[0;34m\w\e[0m ]$(parse_git_branch)\n\$ '
