@@ -16,7 +16,7 @@
  '(menu-bar-mode nil)
  '(package-selected-packages
    (quote
-    (iedit function-args company-c-headers company helm-gtags ag helm-ag ac-helm nlinum ace-window)))
+    (helm-swoop iedit function-args company-c-headers company helm-gtags ag helm-ag ac-helm nlinum ace-window)))
  '(tool-bar-mode nil)
  '(tooltip-mode nil))
 (custom-set-faces
@@ -63,8 +63,10 @@ There are two things you can do about this warning:
 
 
 ;; indenting
-(setq-default c-default-style "gnu"
-              c-basic-offset 4)
+(setq-default c-default-style "linux"
+              c-basic-offset 4
+	      tab-width 4
+	      indent-tabs-mode nil)
 (add-hook 'c-mode-common-hook '(lambda () (c-toggle-auto-state 1)))
 
 (require 'company)
