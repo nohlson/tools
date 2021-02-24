@@ -73,6 +73,8 @@
 		shell-mode-hook))
   (add-hook mode (lambda () (display-line-numbers-mode 0))))
 
+;; Only show line numbers in code buffers
+(add-hook 'prog-mode-hook #'display-line-numbers-mode)
 
 ;; Use rainbow delimiters
 (use-package rainbow-delimiters
@@ -148,20 +150,55 @@
 ;;   :config
 ;;   (lsp-enable-which-key-integration t))
 
-(use-package lsp-mode :commands lsp :ensure t)
+(use-package lsp-mode
+  :ensure t
+  :commands lsp lsp-deferred
+  :config
+  (lsp-enable-which-key-integration t)
+  :hook ((python-mode c-mode c++-mode) . lsp))
+
+(use-package lsp-ui
+  :ensure t
+  :commands lsp-ui-mode)
+
 (use-package company-lsp
   :ensure t
   :commands company-lsp
   :config (push 'company-lsp company-backends))
 
+;; Use ccls
+;; (use-package ccls
+;;   :ensure t
+;;   :config
+;;   (setq ccls-executable "ccls")
+;;   (setq lsp-prefer-flymake nil)
+;;   (setq-default flycheck-disabled-checkers '(c/c++-clang c/c++-cppcheck c/c++-gcc))
+;;   :hook ((c-mode c++-mode objc-mode) .
+;;          (lambda () (require 'ccls) (lsp))))
+
+;; (lsp-register-client
+;;     (make-lsp-client :new-connection (lsp-tramp-connection "clangd")
+;;                      :major-modes '(c++-mode)
+;;                      :remote? t
+;;                      :server-id 'clangd))
+
+;; Tramp should use the path of the login user. This is mostly for remote language servers
+(use-package tramp)
+(add-to-list 'tramp-remote-path 'tramp-own-remote-path)
 
 
-;; Use ccls for lsp
-(use-package ccls
-  :ensure t
+;; Set initial frame size at startup
+(add-to-list 'default-frame-alist '(height . 100))
+(add-to-list 'default-frame-alist '(width . 250))
+
+
+;; Term modes setup
+(use-package term
   :config
-  (setq ccls-executable "ccls")
-  (setq lsp-prefer-flymake nil)
-  (setq-default flycheck-disabled-checkers '(c/c++-clang c/c++-cppcheck c/c++-gcc))
-  :hook ((c-mode c++-mode objc-mode) .
-         (lambda () (require 'ccls) (lsp))))
+  (setq explicit-shell-file-name "bash")
+  (setq term-prompt-regexp "^[^#$%>\\n]*[#$%>] *"))
+
+(use-package vterm
+  :commands vterm
+  :config
+  (setq vterm-max-scrollback 10000))
