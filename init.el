@@ -7,6 +7,13 @@
 
 (menu-bar-mode -1)                     ; Disable the menu bar
 
+(setq c-default-style "linux")
+
+(defun my-c++-mode-hook ()
+  (setq c-basic-offset 4)
+  (c-set-offset 'substatement-open 0))
+(add-hook 'c++-mode-hook 'my-c++-mode-hook)
+
 
 ;; Set up the visible bell
 (setq visible-bell t)
@@ -70,7 +77,8 @@
 (dolist (mode '(org-mode-hook
 		term-mode-hook
 		eshell-mode-hook
-		shell-mode-hook))
+		shell-mode-hook
+		vterm-mode-hook))
   (add-hook mode (lambda () (display-line-numbers-mode 0))))
 
 ;; Only show line numbers in code buffers
@@ -87,11 +95,11 @@
   :config
   (setq which-key-idle-delay 0.3))
 
-(use-package counsel
-  :bind (("M-x" . counsel-M-x)
+(use-package counsel  :bind (("M-x" . counsel-M-x)
 	 ("C-x b" . counsel-switch-buffer)
 	 ("C-x C-f" . counsel-find-file)
 	 ("C-M-l" . counsel-imenu)
+	 ("M-y" . counsel-yank-pop)
 	 :map minibuffer-local-map
 	 ("C-r" . 'counsel-minibuffer-history)))
 
@@ -150,21 +158,21 @@
 ;;   :config
 ;;   (lsp-enable-which-key-integration t))
 
-(use-package lsp-mode
-  :ensure t
-  :commands lsp lsp-deferred
-  :config
-  (lsp-enable-which-key-integration t)
-  :hook ((python-mode c-mode c++-mode) . lsp))
+;; (use-package lsp-mode
+;;  :ensure t
+;;  :commands lsp lsp-deferred
+;;  :config
+;;  (lsp-enable-which-key-integration t)
+;;  :hook ((python-mode c-mode c++-mode) . lsp))
 
-(use-package lsp-ui
-  :ensure t
-  :commands lsp-ui-mode)
+;; (use-package lsp-ui
+;;  :ensure t
+;;  :commands lsp-ui-mode)
 
-(use-package company-lsp
-  :ensure t
-  :commands company-lsp
-  :config (push 'company-lsp company-backends))
+;;(use-package company-lsp
+;;  :ensure t
+;;  :commands company-lsp
+;;  :config (push 'company-lsp company-backends))
 
 ;; Use ccls
 ;; (use-package ccls
@@ -186,6 +194,16 @@
 (use-package tramp)
 (add-to-list 'tramp-remote-path 'tramp-own-remote-path)
 
+(use-package eglot
+  :ensure t)
+(add-hook 'cpp-mode 'eglot-ensure)
+(add-hook 'c-mode 'eglot-ensure)
+(add-hook 'python-mode 'eglot-ensure)
+
+(use-package company
+  :ensure t
+  :hook
+  (after-init . global-company-mode))
 
 ;; Set initial frame size at startup
 (add-to-list 'default-frame-alist '(height . 100))
@@ -202,3 +220,73 @@
   :commands vterm
   :config
   (setq vterm-max-scrollback 10000))
+
+
+;; Show column number in all buffers
+(setq column-number-mode t)
+
+
+;; Disable x window dialog boxes to attempt to fix crashes
+(defadvice yes-or-no-p (around prevent-dialog activate)
+  "Prevent yes-or-no-p from activating a dialog"
+  (let ((use-dialog-box nil))
+    ad-do-it))
+(defadvice y-or-n-p (around prevent-dialog-yorn activate)
+  "Prevent y-or-n-p from activating a dialog"
+  (let ((use-dialog-box nil))
+    ad-do-it))
+
+;; Use smex to have counsel-M-x show most recent commands first
+(use-package smex)
+
+
+;; eshell config
+(defun efs/configure-eshell ()
+	;; Save command history when commands are entered
+	(add-hook 'eshell-save-some-history)
+
+	;; Truncate buffer for performance
+	(add-to-list 'eshell-output-filter-functions 'eshell-truncate-buffer)
+
+	(setq eshell-history-size         10000
+	      eshell-buffer-maximum-lines 10000
+	      eshell-hist-ignoredups t
+	      eshell-scroll-to-bottom-on-input t))
+
+(use-package eshell-git-prompt)
+
+(use-package eshell
+  :hook (eshell-first-time-mode . efs/configure-eshell)
+  :config
+  (eshell-git-prompt-use-theme 'powerline))
+
+(use-package dired-single)
+
+;; Dired
+(use-package dired
+  :ensure nil
+  :commands (dired dired-jump)
+  :bind (("C-x C-j" . dired-jump))
+  :config
+  (with-eval-after-load 'dired
+    (bind-keys
+     ;; Use dired single to keep all dired instances in the same buffer
+     :map dired-mode-map
+     ("<return>" . dired-single-buffer)
+     ("<double-mouse-1>" . dired-single-buffer-mouse)
+     ("^" . dired-single-up-directory))))
+
+;; Get icons in dired
+(use-package all-the-icons-dired
+  :hook (dired-mode . all-the-icons-dired-mode))
+
+;; Automatically update packages
+(use-package auto-package-update
+  :custom
+  (auto-package-update-interval 7)
+  (auto-package-update-prompt-before-update t)
+  (auto-package-update-hide-results t)
+  :config
+  (auto-package-update-maybe)
+  (auto-package-update-at-time "11:00"))
+
