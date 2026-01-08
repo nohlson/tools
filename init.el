@@ -221,6 +221,9 @@
   :config
   (setq vterm-max-scrollback 10000))
 
+(with-eval-after-load 'vterm
+  (define-key vterm-mode-map [mouse-4] #'vterm-scroll-down)
+  (define-key vterm-mode-map [mouse-5] #'vterm-scroll-up))
 
 ;; Show column number in all buffers
 (setq column-number-mode t)
