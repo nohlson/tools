@@ -216,14 +216,17 @@
   (setq explicit-shell-file-name "bash")
   (setq term-prompt-regexp "^[^#$%>\\n]*[#$%>] *"))
 
+
+;; inheritenv is required by vterm
+(use-package inheritenv
+  :ensure t)
+
 (use-package vterm
+  :ensure t
   :commands vterm
   :config
   (setq vterm-max-scrollback 10000))
 
-(with-eval-after-load 'vterm
-  (define-key vterm-mode-map [mouse-4] #'vterm-scroll-down)
-  (define-key vterm-mode-map [mouse-5] #'vterm-scroll-up))
 
 ;; Show column number in all buffers
 (setq column-number-mode t)
@@ -292,4 +295,194 @@
   :config
   (auto-package-update-maybe)
   (auto-package-update-at-time "11:00"))
+(custom-set-variables
+ ;; custom-set-variables was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(package-selected-packages
+   '(swift3-mode conda claude-code gptel exec-path-from-shell minuet dash plz pdf-tools auto-package-update all-the-icons-dired dired-single eshell-git-prompt smex vterm company magit counsel-projectile projectile general helpful ivy-rich counsel which-key rainbow-delimiters doom-modeline doom-themes swiper)))
+(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ )
 
+;; Send C-c to vterm
+;; (define-key vterm-mode-map (kbd "C-c C-c") 'vterm-send-C-c)
+
+;; ============================================
+;; EMACS AI SETUP - OpenAI for completions, Claude Pro for Claude Code
+;; ============================================
+
+;; Bootstrap function for GitHub packages
+(defun my/ensure-github-package (name repo)
+  "Ensure a GitHub package is installed in site-lisp."
+  (let ((package-dir (expand-file-name 
+                     (concat "site-lisp/" name) 
+                     user-emacs-directory)))
+    (unless (file-exists-p package-dir)
+      (message "Installing %s from GitHub..." name)
+      (make-directory (file-name-directory package-dir) t)
+      (shell-command 
+       (format "git clone https://github.com/%s.git %s" 
+               repo 
+               package-dir)))
+    (add-to-list 'load-path package-dir)))
+
+;; Inherit shell variables for OpenAI
+(use-package exec-path-from-shell
+  :ensure t
+  :config
+  (when (memq window-system '(mac ns x))
+    (exec-path-from-shell-initialize)
+    (exec-path-from-shell-copy-env "OPENAI_API_KEY")))
+
+;; CONDA ENVIRONMENT MANAGEMENT
+(use-package conda
+  :ensure t
+  :init
+  ;; Set the path to your conda installation (adjust if different)
+  (setq conda-anaconda-home (expand-file-name "~/miniconda3"))
+  (setq conda-env-home-directory (expand-file-name "~/miniconda3"))
+  :config
+  ;; Activate conda for the session
+  (conda-env-initialize-interactive-shells)
+  (conda-env-initialize-eshell)
+  ;; Auto-activate conda in python-mode buffers
+  (conda-env-autoactivate-mode t)
+  ;; Bind key for quick environment switching
+  (global-set-key (kbd "C-c C-e") 'conda-env-activate))
+
+;; MINUET - Inline code completion with OpenAI
+(use-package minuet
+  :ensure t
+  :init
+  (setq minuet-provider 'openai)
+  (add-hook 'prog-mode-hook #'minuet-auto-suggestion-mode)
+  
+  :bind (("M-i"   . minuet-show-suggestion)
+         ("C-c m" . minuet-configure-provider)
+         :map minuet-active-mode-map
+         ("M-p" . minuet-previous-suggestion)
+         ("M-n" . minuet-next-suggestion)
+         ("M-A" . minuet-accept-suggestion)
+         ("M-a" . minuet-accept-suggestion-line)
+         ("M-e" . minuet-dismiss-suggestion))
+  
+  :config
+  (plist-put minuet-openai-options :model "gpt-4o-mini")
+  (plist-put minuet-openai-options :api-key
+             (lambda () (getenv "OPENAI_API_KEY")))
+  (minuet-set-optional-options minuet-openai-options :max_tokens 128))
+
+;; Auto-install claude-code from GitHub
+(my/ensure-github-package "claude-code.el" "stevemolitor/claude-code.el")
+
+;; CLAUDE CODE - Load explicitly with require
+(require 'claude-code)
+
+;; Configure Claude Code
+(setq claude-code-terminal-backend 'vterm)
+
+(add-hook 'claude-code-start-hook
+          (lambda ()
+            (when (eq claude-code-terminal-backend 'vterm)
+              (setq-local vterm-max-scrollback 100000))))
+
+(when (fboundp 'setopt)
+  (setopt vterm-min-window-width 40))
+
+;; Bind keys for Claude Code
+(global-set-key (kbd "C-c a c") 'claude-code)
+(global-set-key (kbd "C-c a k") 'claude-code-kill)
+(global-set-key (kbd "C-c a m") 'claude-code-transient)
+(global-set-key (kbd "C-c a r") 'claude-code-resume)
+
+;; GPTEL - Quick inline prompting with OpenAI
+(use-package gptel
+  :ensure t
+  :bind (("C-c a g" . gptel-send)
+         ("C-c a q" . gptel)
+         ("C-c a r" . gptel-rewrite-menu))
+  :init
+  ;; Set defaults before loading
+  (setq gptel-model "gpt-4o-mini")
+  :config
+  ;; Configure after package loads
+  (setq gptel-backend 
+        (gptel-make-openai "ChatGPT"
+          :stream t
+          :models '("gpt-4o-mini" "gpt-4o" "gpt-3.5-turbo")
+          :key (lambda () (getenv "OPENAI_API_KEY")))))
+
+;; ============================================
+;; WORKFLOW HELPERS
+;; ============================================
+
+(defun my/cursor-layout ()
+  "Set up Cursor-like layout: code on left, Claude Code on right."
+  (interactive)
+  (delete-other-windows)
+  (split-window-right)
+  (other-window 1)
+  (claude-code)
+  (other-window 1))
+
+(global-set-key (kbd "C-c w c") 'my/cursor-layout)
+
+(defun my/send-to-claude-code ()
+  "Copy current region or function to kill ring with instruction prefix."
+  (interactive)
+  (let* ((text (if (use-region-p)
+                   (buffer-substring-no-properties (region-beginning) (region-end))
+                 (thing-at-point 'defun t)))
+         (filename (buffer-file-name))
+         (instruction (read-string "Instruction for Claude: ")))
+    (when text
+      (let ((prompt (format "%s\n\nFile: %s\n\n```\n%s\n```"
+                           instruction
+                           (or filename "current buffer")
+                           text)))
+        (kill-new prompt)
+        (message "Copied to kill ring. Paste into Claude Code with C-y")))))
+
+(global-set-key (kbd "C-c a p") 'my/send-to-claude-code)
+
+
+;; Put frame in focused window
+;; Don't save frame position - let macOS decide
+(setq frame-inhibit-implied-resize t)
+
+;; Remove desktop-save-mode if you have it
+;; (desktop-save-mode -1)
+
+;; Function to center Emacs on current display
+(defun my/center-frame-on-current-display ()
+  "Center Emacs frame on the display where mouse is."
+  (interactive)
+  (let* ((frame (selected-frame))
+         (workarea (frame-monitor-workarea frame))
+         (left (nth 0 workarea))
+         (top (nth 1 workarea))
+         (width (nth 2 workarea))
+         (height (nth 3 workarea))
+         (frame-width (frame-pixel-width))
+         (frame-height (frame-pixel-height))
+         (new-left (+ left (/ (- width frame-width) 2)))
+         (new-top (+ top (/ (- height frame-height) 2))))
+    (set-frame-position frame new-left new-top)))
+
+;; Center frame on launch
+(add-hook 'after-init-hook 'my/center-frame-on-current-display)
+
+;; Bind to a key for manual centering
+(global-set-key (kbd "C-c w m") 'my/center-frame-on-current-display)
+
+;; Include command to start claude code dangerously
+(defun claude-code-start-dangerous ()
+  "Launch Claude Code with permissions skipped."
+  (interactive)
+  (let ((process-environment (cons "CLAUDE_BYPASS_PERMISSIONS=true" process-environment)))
+    (call-interactively 'claude-code-start-in-directory)))
