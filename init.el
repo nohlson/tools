@@ -15,8 +15,9 @@
 (add-hook 'c++-mode-hook 'my-c++-mode-hook)
 
 
-;; Set up the visible bell
-(setq visible-bell t)
+;; Disable the bell entirely (visible-bell showed a caution-icon flash on macOS GUI)
+(setq visible-bell nil)
+(setq ring-bell-function 'ignore)
 
 (load-theme 'tango-dark)
 
@@ -25,7 +26,8 @@
 
 (setq package-archives '(("melpa" . "https://melpa.org/packages/")
 			 ("org" . "https://orgmode.org/elpa/")
-			 ("elpa" . "https://elpa.gnu.org/packages/")))
+			 ("elpa" . "https://elpa.gnu.org/packages/")
+			 ("nongnu" . "https://elpa.nongnu.org/nongnu/")))
 
 (package-initialize)
 (unless package-archive-contents
@@ -55,6 +57,9 @@
 	 :map ivy-reverse-i-search-map
 	 ("C-k" . ivy-previous-line)
 	 ("C-d" . ivy-reverse-i-search-kill))
+  :custom
+  (ivy-height 40)
+  (ivy-fixed-height-minibuffer t)
   :config
   (ivy-mode 1))
 
@@ -73,16 +78,61 @@
 ;; Show line numbers
 (global-display-line-numbers-mode t)
 
-;; Disable line numbers for some modes
-(dolist (mode '(org-mode-hook
-		term-mode-hook
-		eshell-mode-hook
-		shell-mode-hook
-		vterm-mode-hook))
-  (add-hook mode (lambda () (display-line-numbers-mode 0))))
+;; Disable line numbers for some modes. Depth 100 so this runs *after*
+;; global-display-line-numbers-mode's own activation hook (which otherwise
+;; re-enables it right after us) -- recalculating the gutter on every fast
+;; terminal redraw was part of what made vterm feel janky.
+(add-hook 'after-change-major-mode-hook
+          (lambda ()
+            (when (derived-mode-p 'org-mode 'term-mode 'eshell-mode 'shell-mode 'vterm-mode)
+              (display-line-numbers-mode 0)))
+          100)
 
 ;; Only show line numbers in code buffers
 (add-hook 'prog-mode-hook #'display-line-numbers-mode)
+
+;; Avoid GUI stutter on macOS when switching between buffers/windows that use
+;; different fonts (e.g. icon fonts vs regular text) -- font-cache compaction
+;; after GC is a known cause of jumpiness on window/buffer switch.
+(setq inhibit-compacting-font-caches t)
+
+;; Font. Hack Nerd Font Mono carries both the text and the icon glyphs, so
+;; icons in TUIs (Claude Code, etc.) render from the *same* font as the
+;; surrounding text. Mixing fonts is what made rows change height when an
+;; icon blinked in and out, shifting everything around it.
+(when (display-graphic-p)
+  (set-face-attribute 'default nil :family "Hack Nerd Font Mono" :height 115)
+  ;; Anything still missing above falls back to the symbols font rather than
+  ;; to an arbitrary system font with mismatched metrics.
+  (when (member "Symbols Nerd Font Mono" (font-family-list))
+    (set-fontset-font t 'unicode (font-spec :family "Symbols Nerd Font Mono") nil 'append)))
+
+;; Claude Code draws its status bullet (U+23FA) and cycles its spinner through
+;; several Dingbats star/asterisk chars (U+2721-U+2755, e.g. U+273B, U+2733,
+;; U+2722). None of these exist in Hack Nerd Font Mono, so macOS resolves them
+;; to proportional fallback fonts (STIX Two Math / Arial Unicode MS) that are
+;; taller than the default. Emacs always grows a row to fit its tallest glyph
+;; (unlike a real terminal, which just clips into a fixed cell), so every time
+;; one of these blinked in, the whole buffer shifted. Fix: at display time
+;; only, substitute each for a lookalike that Hack/Symbols Nerd Font Mono
+;; actually has, built to the same monospace-cell metrics, so nothing here can
+;; ever change row height. Written with \x escapes rather than literal glyphs
+;; since several of these render invisibly in plain-text editors/tools.
+(defconst my/vterm-glyph-substitutions
+  (list
+   (cons "\x23fa" ?\x25cf)             ; status bullet -> Hack's black circle
+   (cons "[\x2721-\x2755]" ?\xf069)))  ; dingbat stars/asterisks -> nerd-font asterisk icon
+
+(defun my/vterm-fix-oversized-glyphs (beg end _len)
+  (when (derived-mode-p 'vterm-mode)
+    (save-excursion
+      (dolist (sub my/vterm-glyph-substitutions)
+        (goto-char beg)
+        (while (re-search-forward (car sub) end t)
+          (compose-region (match-beginning 0) (match-end 0) (cdr sub)))))))
+(add-hook 'vterm-mode-hook
+          (lambda ()
+            (add-hook 'after-change-functions #'my/vterm-fix-oversized-glyphs nil t)))
 
 ;; Use rainbow delimiters
 (use-package rainbow-delimiters
@@ -200,10 +250,11 @@
 (add-hook 'c-mode 'eglot-ensure)
 (add-hook 'python-mode 'eglot-ensure)
 
-(use-package company
-  :ensure t
-  :hook
-  (after-init . global-company-mode))
+;; Disabled for now, revisit later
+;; (use-package company
+;;   :ensure t
+;;   :hook
+;;   (after-init . global-company-mode))
 
 ;; Set initial frame size at startup
 (add-to-list 'default-frame-alist '(height . 100))
@@ -224,12 +275,60 @@
 (use-package vterm
   :ensure t
   :commands vterm
+  :bind (:map vterm-mode-map
+              ("C-c C-l" . (lambda () (interactive) (vterm-reset-cursor-point) (redraw-display))))
   :config
-  (setq vterm-max-scrollback 10000))
+  (setq vterm-max-scrollback 10000)
+  ;; Stop Emacs from re-centering the window on every spinner redraw, which
+  ;; caused the whole buffer to bounce up and down while Claude was thinking
+  (add-hook 'vterm-mode-hook
+            (lambda ()
+              (setq-local scroll-conservatively 101)
+              (setq-local auto-window-vscroll nil)
+              (setq-local bidi-display-reordering nil))))
 
+;; Dropping a file onto a vterm buffer inserts its path as text (like iTerm),
+;; instead of Emacs' default of opening it as a new buffer.
+(with-eval-after-load 'dnd
+  (defun my/dnd-open-file-or-send-to-vterm (uri action)
+    (let ((file (dnd-get-local-file-name uri t)))
+      (if (and file (with-current-buffer (window-buffer (selected-window))
+                      (derived-mode-p 'vterm-mode)))
+          (with-current-buffer (window-buffer (selected-window))
+            (vterm-send-string (shell-quote-argument file) t)
+            (vterm-send-string " "))
+        (dnd-open-file uri action))))
+  (setcdr (assoc "^file:" dnd-protocol-alist) #'my/dnd-open-file-or-send-to-vterm))
+
+;; Launch `claude` in a new vterm in the current directory, buffer named
+;; after that directory so multiple sessions in different projects are
+;; distinguishable in the buffer list.
+(defun claude ()
+  (interactive)
+  (let* ((dir (abbreviate-file-name (directory-file-name default-directory)))
+         (buf (vterm (generate-new-buffer-name (format "*%s-claude*" dir)))))
+    (with-current-buffer buf
+      (vterm-send-string "claude")
+      (vterm-send-return))))
 
 ;; Show column number in all buffers
 (setq column-number-mode t)
+
+;; Ask (default no) to revert a file-visiting buffer when its file changed on disk.
+;; Tracks the disk modtime we last asked about, so declining doesn't re-prompt
+;; on every subsequent buffer switch -- only when the file changes again.
+(defvar-local my/last-asked-revert-modtime nil)
+(defun my/maybe-revert-buffer-on-switch ()
+  (when (and buffer-file-name
+             (file-exists-p buffer-file-name)
+             (not (verify-visited-file-modtime (current-buffer))))
+    (let ((disk-modtime (file-attribute-modification-time
+                          (file-attributes buffer-file-name))))
+      (unless (equal disk-modtime my/last-asked-revert-modtime)
+        (setq my/last-asked-revert-modtime disk-modtime)
+        (when (yes-or-no-p (format "%s changed on disk. Revert? " (buffer-name)))
+          (revert-buffer t t t))))))
+(add-hook 'buffer-list-update-hook #'my/maybe-revert-buffer-on-switch)
 
 
 ;; Disable x window dialog boxes to attempt to fix crashes
@@ -286,6 +385,10 @@
 (use-package all-the-icons-dired
   :hook (dired-mode . all-the-icons-dired-mode))
 
+;; nerd-icons: doom-modeline and other modern packages use this instead of all-the-icons
+(use-package nerd-icons
+  :ensure t)
+
 ;; Automatically update packages
 (use-package auto-package-update
   :custom
@@ -301,7 +404,7 @@
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  '(package-selected-packages
-   '(swift3-mode conda claude-code gptel exec-path-from-shell minuet dash plz pdf-tools auto-package-update all-the-icons-dired dired-single eshell-git-prompt smex vterm company magit counsel-projectile projectile general helpful ivy-rich counsel which-key rainbow-delimiters doom-modeline doom-themes swiper)))
+   '(eat swift3-mode conda claude-code gptel exec-path-from-shell minuet dash plz pdf-tools auto-package-update all-the-icons-dired dired-single eshell-git-prompt smex vterm company magit counsel-projectile projectile general helpful ivy-rich counsel which-key rainbow-delimiters doom-modeline doom-themes swiper)))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
@@ -356,26 +459,31 @@
   (global-set-key (kbd "C-c C-e") 'conda-env-activate))
 
 ;; MINUET - Inline code completion with OpenAI
-(use-package minuet
-  :ensure t
-  :init
-  (setq minuet-provider 'openai)
-  (add-hook 'prog-mode-hook #'minuet-auto-suggestion-mode)
-  
-  :bind (("M-i"   . minuet-show-suggestion)
-         ("C-c m" . minuet-configure-provider)
-         :map minuet-active-mode-map
-         ("M-p" . minuet-previous-suggestion)
-         ("M-n" . minuet-next-suggestion)
-         ("M-A" . minuet-accept-suggestion)
-         ("M-a" . minuet-accept-suggestion-line)
-         ("M-e" . minuet-dismiss-suggestion))
-  
-  :config
-  (plist-put minuet-openai-options :model "gpt-4o-mini")
-  (plist-put minuet-openai-options :api-key
-             (lambda () (getenv "OPENAI_API_KEY")))
-  (minuet-set-optional-options minuet-openai-options :max_tokens 128))
+;; Disabled for now, revisit later
+;; (use-package minuet
+;;   :ensure t
+;;   :init
+;;   (setq minuet-provider 'openai)
+;;   (add-hook 'prog-mode-hook #'minuet-auto-suggestion-mode)
+;;
+;;   :bind (("M-i"   . minuet-show-suggestion)
+;;          ("C-c m" . minuet-configure-provider)
+;;          :map minuet-active-mode-map
+;;          ("M-p" . minuet-previous-suggestion)
+;;          ("M-n" . minuet-next-suggestion)
+;;          ("M-A" . minuet-accept-suggestion)
+;;          ("M-a" . minuet-accept-suggestion-line)
+;;          ("M-e" . minuet-dismiss-suggestion))
+;;
+;;   :config
+;;   (plist-put minuet-openai-options :model "gpt-4o-mini")
+;;   (plist-put minuet-openai-options :api-key
+;;              (lambda () (getenv "OPENAI_API_KEY")))
+;;   (minuet-set-optional-options minuet-openai-options :max_tokens 128))
+
+;; eat: pure-elisp terminal, handles resize/redraw more robustly than vterm
+(use-package eat
+  :ensure t)
 
 ;; Auto-install claude-code from GitHub
 (my/ensure-github-package "claude-code.el" "stevemolitor/claude-code.el")
@@ -383,13 +491,7 @@
 ;; CLAUDE CODE - Load explicitly with require
 (require 'claude-code)
 
-;; Configure Claude Code
-(setq claude-code-terminal-backend 'vterm)
-
-(add-hook 'claude-code-start-hook
-          (lambda ()
-            (when (eq claude-code-terminal-backend 'vterm)
-              (setq-local vterm-max-scrollback 100000))))
+;; Configure Claude Code (defaults to eat backend)
 
 (when (fboundp 'setopt)
   (setopt vterm-min-window-width 40))
