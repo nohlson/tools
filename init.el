@@ -302,14 +302,26 @@
 
 ;; Launch `claude` in a new vterm in the current directory, buffer named
 ;; after that directory so multiple sessions in different projects are
-;; distinguishable in the buffer list.
+;; distinguishable in the buffer list. Chains `exit` after claude quits so
+;; the underlying shell terminates too -- vterm-kill-buffer-on-exit (t by
+;; default) then kills the buffer/window automatically.
 (defun claude ()
   (interactive)
-  (let* ((dir (abbreviate-file-name (directory-file-name default-directory)))
+  (let* ((dir (file-name-nondirectory (directory-file-name default-directory)))
          (buf (vterm (generate-new-buffer-name (format "*%s-claude*" dir)))))
     (with-current-buffer buf
-      (vterm-send-string "claude")
+      (vterm-send-string "claude; exit")
       (vterm-send-return))))
+
+;; Directional window switching under C-x, mirroring the C-p/C-n/C-b/C-f
+;; up/down/left/right convention already used for cursor movement.
+(global-set-key (kbd "C-x P") #'windmove-up)
+(global-set-key (kbd "C-x N") #'windmove-down)
+(global-set-key (kbd "C-x B") #'windmove-left)
+(global-set-key (kbd "C-x F") #'windmove-right)
+
+;; Shorter binding for the built-in kill-buffer-and-window (default C-x 4 0)
+(global-set-key (kbd "C-x j") #'kill-buffer-and-window)
 
 ;; Show column number in all buffers
 (setq column-number-mode t)
@@ -320,6 +332,11 @@
 (defvar-local my/last-asked-revert-modtime nil)
 (defun my/maybe-revert-buffer-on-switch ()
   (when (and buffer-file-name
+             ;; buffer-list-update-hook also fires when unrelated code (modeline
+             ;; segments, minor modes, etc.) transiently visits this buffer via
+             ;; set-buffer without it ever being displayed -- only prompt when
+             ;; this buffer is actually the one shown in the selected window.
+             (eq (current-buffer) (window-buffer (selected-window)))
              (file-exists-p buffer-file-name)
              (not (verify-visited-file-modtime (current-buffer))))
     (let ((disk-modtime (file-attribute-modification-time
